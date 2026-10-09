@@ -1,73 +1,95 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include "jsy_mk333g.h"
+
+
+void fake_uart_send(const uint8_t *data, uint16_t length)
+ {
+     printf("Sending %d bytes: ", length);
+     for (int i = 0; i < length; i++)
+     {
+         printf("%02X ", data[i]);
+     }
+     printf("\n");
+ }
+
+uint16_t fake_uart_receive(uint8_t *buffer, uint16_t max_length)
+ {
+     // Simulate receiving a response from the device (26 registers = 52 data bytes, 57 bytes total)
+     uint8_t simulated_response[] = {
+         0x01, 0x03, 0x34, // addr, func, byte count (52 bytes = 26 registers)
+         // Reg 0..2 (0x0100..0x0102): Voltages A, B, C (220.33V, 220.50V, 220.67V)
+         0x56, 0x11,
+         0x56, 0x22,
+         0x56, 0x33,
+         // Reg 3..5 (0x0103..0x0105): Currents A, B, C (0.00A, 0.00A, 0.00A)
+         0x00, 0x00,
+         0x00, 0x00,
+         0x00, 0x00,
+         // Reg 6..8 (0x0106..0x0108): intermediate / phase power registers
+         0x00, 0x00,
+         0x00, 0x00,
+         0x00, 0x00,
+         // Reg 9..10 (0x0109..0x010A): Total active power high & low (0x00001234 = 4660 W)
+         0x00, 0x00,
+         0x12, 0x34,
+         // Reg 11..20 (0x010B..0x0114): intermediate registers (10 registers = 20 bytes)
+         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+         // Reg 21 (0x0115): Voltage frequency (50.00 Hz = 5000 = 0x1388)
+         0x13, 0x88,
+         // Reg 22..24 (0x0116..0x0118): phase power factors (3 registers = 6 bytes)
+         0x00, 0x00,
+         0x00, 0x00,
+         0x00, 0x00,
+         // Reg 25 (0x0119): Total power factor (1.00 = 100 = 0x0064)
+         0x00, 0x64,
+         // CRC16: Low byte, High byte
+         0xFB, 0x71
+  
+     };
+     uint16_t len = sizeof(simulated_response);
+     if(len > max_length)
+     {
+         len = max_length;
+     }
+     memcpy(buffer, simulated_response, len);
+     return len;
+ }
+
+
+
 
 int main(void)
 {
-    ////////////////////////////////////////////////////////////
-    uint8_t test_data[] = {0x01, 0x03, 0x01, 0x00, 0x00, 0x03};
-    uint16_t crc = jsy_crc16(test_data, 6);
-    printf("CRC = 0x%04X\n", crc);
-    ///////////////////////////////////////////////////////////
-    uint8_t frame[8];
-    jsy_build_read_request(1, 0x0100, 3, frame);
 
-    for (int i = 0; i < 8; i++)
-    {
-        printf("%02X", frame[i]);
-    }
-    printf("\n");
-    ////////////////////////////////////////////////////////
-    uint8_t response1[] = {0x01, 0x03, 0x06, 0x56, 0x11, 0x56, 0x22, 0x56, 0x33, 0x1F, 0x77};
-    uint16_t registers[3];
 
-    jsy_status_t status = jsy_parse_response(response1, sizeof(response1), 3, registers);
+jsy_device_t meter1;
+meter1.send = fake_uart_send;
+meter1.receive = fake_uart_receive;
+meter1.slave_address = 1;
 
-    if (status == JSY_OK)
-    {
-        printf("Parsed Ok\n");
-        for (int i = 0; i < 3; i++)
-        {
-            printf("Register %d raw = %u\n", i, registers[i]);
-        }
-    }
-    else
-    {
-        printf("Parse failed with status %d\n", status);
-    }
-    ///////////////////////////////////////////////////
-    uint8_t request[8];
-    jsy_build_read_request(1, 0x0100, 6, request);
+jsy_measurements_t results;
+jsy_status_t read_status = jsy_read_measurements(&meter1, &results);
 
-    uint8_t response2[] = {
-        0x01, 0x03, 0x0C, // addr, func, byte count (12 bytes = 6 registers)
-        0x56, 0x11,       // voltage A = 220.33
-        0x56, 0x22,       // voltage B = 220.50
-        0x56, 0x33,       // voltage C = 220.67
-        0x00, 0x00,       // current A = 0.00
-        0x00, 0x00,       // current B = 0.00
-        0x00, 0x00,       // current C = 0.00
-        0xEE, 0x6E        //  CRC low=0xEE  high=0x6E
-    };
+if(read_status == JSY_OK)
+{
+    printf("Voltage A: %.2f V\n", results.voltage_a);
+    printf("Voltage B: %.2f V\n", results.voltage_b);
+    printf("Voltage C: %.2f V\n", results.voltage_c);
+    printf("Current A: %.2f A\n", results.current_a);
+    printf("Current B: %.2f A\n", results.current_b);
+    printf("Current C: %.2f A\n", results.current_c);
+    printf("Frequency: %.2f Hz\n", results.voltage_frequency);
+    printf("Power Factor Total: %.2f\n", results.power_factor_total);
+    printf("Total Active Power (W): %u W\n", results.total_active_power_w);
+}
+else
+{
+    printf("Failed to read measurements, status code: %d\n", read_status);
+}
 
-    uint16_t crc2 = jsy_crc16(response2, 15);
-    printf("CRC low = 0x%02X high = 0x%02X\n", crc2 & 0xFF, crc2 >> 8);
+return 0;
 
-    uint16_t raw_regs[6];
-    jsy_status_t status2 = jsy_parse_response(response2, sizeof(response2), 6, raw_regs);
-
-    if (status2 == JSY_OK)
-    {
-        jsy_measurements_t m;
-        jsy_decode_measurements(raw_regs, &m);
-        printf("Voltage A: %.2f V\n", m.voltage_a);
-        printf("Voltage B: %.2f V\n", m.voltage_b);
-        printf("Voltage C: %.2f V\n", m.voltage_c);
-    }
-    else
-    {
-        printf("Parse failed: %d\n", status2);
-    }
-
-    return 0;
 }
